@@ -62,12 +62,13 @@ const loadingStates = [
     text: "Uploading files",
   },
   {
-    text: "Processing files",
+    text: "Scraping pages", // Changed from "Processing files"
   },
   {
     text: "Creating Bot",
   },
 ];
+
 const AITrainingPage = () => {
   // Bot metadata state
   const [botMetadata, setBotMetadata] = useState<BotMetadata>({
@@ -274,6 +275,7 @@ const AITrainingPage = () => {
       return updated;
     });
   };
+  
   // Handle file upload response
   const handleUploadResponse = (response: UploadResponse) => {
     const newUploadedFiles = { ...uploadedFiles };
@@ -308,6 +310,11 @@ const AITrainingPage = () => {
     return newUploadedFiles;
   };
 
+  // Helper function to check if there are any selected files
+  const hasSelectedFiles = () => {
+    return Object.values(selectedFiles).some(files => files.length > 0);
+  };
+
   // Start training
   const handleStartTraining = async () => {
     // Validate required fields
@@ -325,51 +332,69 @@ const AITrainingPage = () => {
 
     // Set training status to pending
     setTrainingStatus("pending");
-    setTrainingMessage("Uploading files...");
     
+    const bot_id = nanoid();
+    const kb_id = nanoid()
+    const generatedBotId = `${bot_id}`;
+    const generatedKbId = `${kb_id}`;
+    setBotId(generatedBotId);
+    setKbId(generatedKbId);
 
     try {
-      const formData = new FormData();
+      let processedFiles = { ...uploadedFiles };
 
-      // Add files to formData
-      for (const [type, files] of Object.entries(selectedFiles)) {
-        files.forEach((file) => formData.append(type, file));
-      }
+      // Check if we have files to upload
+      if (hasSelectedFiles()) {
+        // Step 1: Upload files
+        setTrainingMessage("Uploading files...");
+        setCurrentState(0);
 
-      // Add user_id, bot_id, and kb_id to query parameters
-      const bot_id = nanoid();
-      const kb_id = nanoid()
-      const generatedBotId = `${bot_id}`;
-      const generatedKbId = `${kb_id}`;
-      setBotId(generatedBotId);
-      setKbId(generatedKbId);
-      const queryParams = new URLSearchParams({
-        user_id: userId!,
-        bot_id: generatedBotId, // Or generate a unique ID
-        kb_id: generatedKbId,
-      });
+        const formData = new FormData();
 
-      // Step 1: Upload files
-      setTrainingMessage("Uploading files and processing URLs...");
-      const uploadResponse = await axios.post<UploadResponse>(
-        `/api/v1/upload?${queryParams.toString()}`,
-        formData,
-        {
-          headers: {
-            "Content-Type": "multipart/form-data",
-          },
+        // Add files to formData
+        for (const [type, files] of Object.entries(selectedFiles)) {
+          files.forEach((file) => formData.append(type, file));
         }
-      );
-    
-      if (!uploadResponse.data.success) {
-        throw new Error("File upload failed");
+
+        const queryParams = new URLSearchParams({
+          user_id: userId!,
+          bot_id: generatedBotId,
+          kb_id: generatedKbId,
+        });
+
+        const uploadResponse = await axios.post<UploadResponse>(
+          `/api/v1/upload?${queryParams.toString()}`,
+          formData,
+          {
+            headers: {
+              "Content-Type": "multipart/form-data",
+            },
+          }
+        );
+      
+        if (!uploadResponse.data.success) {
+          throw new Error("File upload failed");
+        }
+
+        // Process the uploaded files
+        processedFiles = handleUploadResponse(uploadResponse.data);
       }
-      setCurrentState(0);
-      // Process the uploaded files and URLs
-      const processedFiles = handleUploadResponse(uploadResponse.data);
-      setCurrentState(1);
-      // Step 2: Create bot
+
+      // Step 2: Scraping pages (if URLs exist) or processing files
+      if (enteredUrls.length > 0) {
+        setTrainingMessage("Scraping pages...");
+        setCurrentState(1);
+        // Add URLs to processedFiles
+        processedFiles.web_url = [...processedFiles.web_url, ...enteredUrls];
+      } else if (hasSelectedFiles()) {
+        setTrainingMessage("Processing files...");
+        setCurrentState(1);
+      }
+
+      // Step 3: Create bot
       setTrainingMessage("Creating bot...");
+      setCurrentState(2);
+      
       const botCreationData = {
         user_id: userId,
         bot_id: generatedBotId,
@@ -378,7 +403,7 @@ const AITrainingPage = () => {
         pdf: processedFiles.pdf.length > 0 ? processedFiles.pdf : undefined,
         txt: processedFiles.txt.length > 0 ? processedFiles.txt : undefined,
         json: processedFiles.json.length > 0 ? processedFiles.json : undefined,
-        web_url: enteredUrls.length ? enteredUrls : undefined,
+        web_url: processedFiles.web_url.length > 0 ? processedFiles.web_url : undefined,
         prompt_template: promptTemplate || undefined,
         temperature: aiConfig.temperature,
         bot_name: botMetadata.name,
@@ -389,12 +414,12 @@ const AITrainingPage = () => {
         api_key: aiConfig.useCustomAPIKey ? aiConfig.apiKey : undefined,
       };
 
-      const createBotResponse = await axios.post(
+      await axios.post(
         `/api/v1/bot/create`,
         botCreationData,
         { withCredentials: true }
       );
-      setCurrentState(2);
+
       // Handle successful creation
       setTrainingStatus("success");
       setTrainingMessage(`Bot "${botMetadata.name}" successfully trained!`);
@@ -411,7 +436,6 @@ const AITrainingPage = () => {
       setCurrentState(-1);
     }
   };
-
   async function handleGoToChat() {
     router.push(`/chat/${botId}/${kbId}`)
   }
